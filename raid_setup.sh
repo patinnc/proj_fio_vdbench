@@ -261,6 +261,29 @@ fi
   fi
 
 if [ "$DEL_RAID" == "1" ]; then
+  P_MD_FL="/proc/mdstat"
+  if [ ! -e $P_MD_FL ]; then
+     echo "$0.$LINENO you are trying to delete a raid but $P_MD_FL is not found (so no raid exists?). bye"
+     exit 1
+  fi
+  DRVS_IN_RAID="$(awk '
+    /active/ {
+      for (i=4; i <= NF; i++) {
+        v = $i;
+        pos = index(v, "[");
+        if (pos > 0) { v = substr(v, 1, pos-1); }
+        str = str " " v;
+      }
+    }
+    END{
+      printf("%s\n", str);
+    }' $P_MD_FL)"
+  UARR=()
+  echo "$0.$LINENO drvs_in $P_MD_FL : $DRVS_IN_RAID"
+  for i in $DRVS_IN_RAID; do
+    UARR+=($i)
+  done
+
 if [ "$LST_DEVS_IN" != "" ]; then
   TARR=()
   k=0
