@@ -106,6 +106,7 @@ if [ -e $CLS_DIR_DEV_DEV/current_link_speed ]; then
 else
   SPD_DIR=$CLS_DIR_DEV
 fi
+echo "$0.$LINENO files cur_speed, cur_width: $SPD_DIR/current_link_speed $SPD_DIR/current_link_width"
 CUR_SPEED="$(cat $SPD_DIR/current_link_speed)"
 CUR_WIDTH="$(cat $SPD_DIR/current_link_width)"
 MAX_SPEED="$(cat $SPD_DIR/max_link_speed)"
