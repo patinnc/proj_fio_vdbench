@@ -10,7 +10,7 @@ if [[ "$INF" == "" ]] || [[ ! -e "$INF" ]]; then
 fi
 
 awk '
-  {
+  /^qq /{
     if (NF==0) {printf("\n"); next; }
     #printf("%s", $1);
     if ($1 != "qq") { next;}
@@ -19,22 +19,40 @@ awk '
     j = 0;
       key[ln,++j] = "hdr";
       val[ln,j] = $1;
-    for (i=2; i <= NF; i+=2) {
+    #for (i=2; i <= NF; i+=2) {
+    i = 2;
+    while (i <= NF) {
+      incr = 2;
+      # check for missing value (field i+1 ends in =)
+      if (substr($(i+1), length($(i+1)), 1) == "=") {
+        incr = 1;
+      }
       key[ln,++j] = $i;
-      val[ln,j] = $(i+1);
+      if (incr == 2) {
+        val[ln,j] = $(i+1);
+      } else {
+        val[ln,j] = "-1";
+      }
+      i += incr;
     }
+    sv_mx_j[ln] = j;
     mx_j = j;
   }
   END{
     for (m=1; m <= ln; m++) {
-      if (m==1) {
-        printf("%s", key[m,1]);
+      mx_j = sv_mx_j[m];
+      hdr_str = sprintf("%s", key[m,1]);
+      #if (m==1) {
         for (j=2; j <= mx_j; j++) {
           v = key[m,j]
           gsub(/=/, "", v);
-          printf(" %s", v);
+          hdr_str = hdr_str "" sprintf(" %s", v);
         }
-        printf("\n");
+        #hdr_str = hdr_str "" sprintf("\n");
+      #}
+      if (hdr_str != hdr_str_prev) {
+        printf("%s\n", hdr_str);
+        hdr_str_prev = hdr_str;
       }
       printf("%s", val[m,1]);
       for (j=2; j <= mx_j; j++) {
