@@ -65,6 +65,7 @@ USE_FS=1
 USE_FS=
 RAW=
 USE_MNT=
+PER_DRV=0
 
 DRY=0  # dry_run false, run everything
 DRY=1  # dry_run true, don't run fio, don't run iostat, but dirs and output files ok.
@@ -74,7 +75,7 @@ VRB=0
 
 #fio --filename=/dev/md0 --direct=1 --size=100% --log_avg_msec=10000 --filename=fio_test_file --ioengine=libaio --name disk_fill --rw=write --bs=256k --iodepth=8
 
-while getopts "hvy-:B:c:D:f:J:L:m:O:p:R:r:s:t:T:" opt; do
+while getopts "hvy-:B:c:D:f:J:L:m:O:P:p:R:r:s:t:T:x:" opt; do
   case "${opt}" in
     - )
             case "${OPTARG}" in
@@ -139,6 +140,9 @@ while getopts "hvy-:B:c:D:f:J:L:m:O:p:R:r:s:t:T:" opt; do
     p )
       PERF_IN="$(echo "$OPTARG" | sed 's/,/ /g')"
       ;;
+    P )
+      PER_DRV=$OPTARG
+      ;;
     R )
       USE_RAID=$OPTARG  # like md0 or md127  or 0 for don't use raid (the default)
       ;;
@@ -156,6 +160,9 @@ while getopts "hvy-:B:c:D:f:J:L:m:O:p:R:r:s:t:T:" opt; do
       ;;
     v )
       VRB=$((VRB+1))
+      ;;
+    x )
+      XTRA_OPT="$OPTARG"
       ;;
     y )
       ACCEPT_LICENSE="y"
@@ -183,12 +190,15 @@ while getopts "hvy-:B:c:D:f:J:L:m:O:p:R:r:s:t:T:" opt; do
       echo "   -L devices_list  like nvme0n1,nvme1n1[,...]   is the fio --numjobs= parameter"
       echo "   -m mount_point   like /mnt/disk or /disk/1    assumes the devices are mounted to this mount point and assumes -f 1 (use file system)"
       echo "   -O operation_list  like op1[,op2[,...]]    like randread randwrite read write or precondition. fio -rw parameter"
+      echo "   -p 0|1  run 'perf stat' on fio job(s) if '-p 1'. Default is 0 (don't run perf stat)"
+      echo "   -P 0|1  generate 1 set of job(s) per drive if '-P 1'. Default is generate feed all the selected drives to 1 set of jobs"
       echo "   -R raid_dev   use the raid device like md0 or md127 (checked against /proc/mdstat). operations will be against this device instead of nvme0n1 etc."
       echo "   -r raw1_or_no0  1 means use raw device (wipe out file system"
       echo "   -s suffix_to_add_to_filenames   a string that will be added to file names"
       echo "   -t time_in_secs                 time for each operation. fio --runtime= parameter"
       echo "   -T thread_list    like 1[,2[,...]]  threads per job. fio --iodepth= parameter"
       echo "   -v     verbose"
+      echo "   -x \"fio options\"    options passed to fio"
       echo "   -y     accept license and acknowledge you may wipe out disks"
       echo " "
       exit 1
@@ -547,6 +557,18 @@ for MAX_DRIVES in $DRVS_LST; do
             IOS_PID=$!
           fi
           echo $IO_FL > iostat_file_cur.txt
+          DLST=$(echo "$DRV" | sed 's/:/ /g')
+          kk=-1
+          for jj in $DLST; do
+            kk=$((kk+1))
+          done
+          PD_MAX=$kk
+          OFL=$FIO_FL
+          OFL_RT="$(echo "$FIO_FL" | sed 's/.txt$//')"
+          if [[ "$OFL_RT" != "" ]] && [[ "$(ls -1 $OFL_RT* 2> /dev/null | wc -l)" -gt "0" ]]; then
+            echo "$0.$LINENO rm $OFL_RT*"
+                             rm $OFL_RT*
+          fi
 
           # ===================== preconditioning ==============
           if [[ "$OPER" == "precondition" ]] && [[ "$GOT_PRECOND" == "0" ]] && [[ "$RAW" == "1" ]] && [[ "$USE_RAID" == "" ]]; then
@@ -560,7 +582,6 @@ for MAX_DRIVES in $DRVS_LST; do
             PC_BLK_SZ=512k # breaks up reqs into smaller size
             PC_BLK_SZ=256k
             #echo "$0.$LINENO start 2 dd zeros of $DRV > $OFL"
-            DLST=$(echo "$DRV" | sed 's/:/ /g')
             for jj in $DLST; do
               V="$(echo $jj |sed 's!/dev/!!')"
               V_MS=$(cat /sys/class/block/$V/queue/max_segments)
@@ -575,10 +596,6 @@ for MAX_DRIVES in $DRVS_LST; do
             PC_BLK_SZ="${V_SZ}k"
             #PC_BLK_SZ=1m # breaks up reqs into smaller size
             #exit 1
-            OFL=$FIO_FL
-            if [[ "$OFL" != "" ]] && [[ -e $OFL* ]]; then
-              rm $OFL*
-            fi
             kk=-1
             for jj in $DLST; do
               kk=$((kk+1))
@@ -591,9 +608,9 @@ for MAX_DRIVES in $DRVS_LST; do
             if [ "$COUNT_BLKS_IN" != "" ]; then
               PREC_SZ=" --size=$COUNT_BLKS_IN "
             fi
-            kk=-1
             PRECOND_OFILES=
             PRECOND_PIDS=
+            kk=-1
             for jj in $DLST; do
             kk=$((kk+1))
             PRECOND_OFILES="$OFL.$kk $PRECOND_OFILES"
@@ -629,35 +646,60 @@ for MAX_DRIVES in $DRVS_LST; do
 
           # ===================== not preconditioning ==============
           TM_RUN=$SV_TM_RUN
-          OPT_XTR=" --random_generator=lfsr "
+          OPT_GEN=" --random_generator=lfsr "
+          OPT_IOD_BATCH=
+          OPT_XTRA=
+          if [ "$XTRA_OPT" != "" ]; then
+            OPT_XTRA=$XTRA_OPT
+          fi
+          PRF_FL=
           OFL=$FIO_FL
+          OFL_LST=
+          RUNS_IN_LOOP=$((RUNS_IN_LOOP+1))
           echo "$0.$LINENO ofl= $OFL"
           if [ "$GOT_PRECOND" == "0" ]; then
-            echo __cmd $FIO_BIN --filename=$DRV $OPT_THR $OPT_XTR --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS $OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1
-            echo __cmd $FIO_BIN --filename=$DRV $OPT_THR $OPT_XTR --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS $OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 >> $OFL
+            if [ "$PER_DRV" != "1" ]; then
+              DLST="$DRV"
+            fi
+            kk=-1
+            OFL_ARR=()
+            for drv in $DLST; do
+            kk=$((kk+1))
+            if [ "$PER_DRV" == "1" ]; then
+              #if [[ "$PD_MAX" -gt "0" ]]; then
+                OFL="$(echo "$FIO_FL" | sed "s/.txt$/.$kk.txt/")"
+              #fi
+            fi
+            OFL_ARR[$kk]="$OFL"
+            OFL_LST="$OFL_LST $OFL"
+            echo __cmd $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS$OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA
+            echo __cmd $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS$OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA >> $OFL
             echo "__threads $THREADS" >> $OFL
             echo "__jobs $JOBS" >> $OFL
             echo "__raw $RAW" >> $OFL
             echo "__drives $DRVS" >> $OFL
-            echo "__drv $DRV" >> $OFL
+            echo "__drv $drv" >> $OFL
             echo "__blk_sz $BLK_SZ" >> $OFL
             echo "__seq_rnd $OPER" >> $OFL
             echo "__elap_secs $TM_RUN" >> $OFL
+            echo "__per_drv $PER_DRV" >> $OFL
             echo "__size $COUNT_BLKS_IN" >> $OFL
-          fi
-          RUNS_IN_LOOP=$((RUNS_IN_LOOP+1))
-          PRF_FL=
-          if [ "$PERF_IN" == "1" ]; then
+            OPT_PERF=
+          if [[ "$kk" == "0" ]] && [[ "$PERF_IN" == "1" ]]; then
             PRF_FL="$(echo "$FIO_FL" | sed 's/.txt$/_perf.txt/')"
             OPT_PERF="$PERF_BIN stat -o $PRF_FL -a -e msr/tsc/,msr/mperf/,msr/aperf/ -- "
-            echo "__opt_perf= $OPT_PERF" >> $OFL
+            echo "__opt_perf= $OPT_PERF fio_cmd... >> $OFL" >> $OFL
           fi
-          #echo "$0.$LINENO drv $DRV"
-          #exit 1
-          if [ "$DRY" == "0" ]; then
-            if [ "$GOT_PRECOND" == "0" ]; then
-               $OPT_PERF $FIO_BIN --filename=$DRV $OPT_THR $OPT_XTR --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS $OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 | tee -a $OFL
+            #echo "$0.$LINENO drv $drv"
+            #exit 1
+            if [ "$DRY" == "0" ]; then
+               nohup $OPT_PERF $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS$OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA >> $OFL 2> $OFL.stderr.txt &
+               PD_PIDS="$! $PD_PIDS"
             fi
+            done
+          fi
+          if [ "$PD_PIDS" != "" ]; then
+            wait $PD_PIDS
           fi
           if [ "$IOS_PID" != "" ]; then
             kill -SIGTERM $IOS_PID
@@ -665,13 +707,16 @@ for MAX_DRIVES in $DRVS_LST; do
           fi
           TM_CUR=$(date +"%s")
           TM_DFF=$((TM_CUR-TM_BEG))
-          echo "$0.$LINENO secs_elapsed= $TM_DFF ofl= $OFL"
+          echo "$0.$LINENO secs_elapsed= $TM_DFF ofl= $OFL_LST"
           if [ "$PRECOND_OFILES" != "" ]; then
             OFL="$PRECOND_OFILES"
+          else
+            OFL="$OFL_LST"
           fi
           RES_FL="f_res${SFX_IN}.txt"
+            echo "$0.$LINENO OFL list= $OFL"
             cat $OFL | grep "^__" > $RES_FL
-            awk -v num_cpus="$NUM_CPUS" -v sfx_in="$SFX" -v tm_dff="$TM_DFF" -v drvs="$DRVS" -v sz="$BLK_SZ" -v threads="$THREADS" -v procs="$JOBS" -v rdwr="$OPER" -v fio_fl="$FIO_FL" -v tm="$TM_RUN" -v iost_fl="$IO_FL" '
+            awk -v per_drv="$PER_DRV" -v num_cpus="$NUM_CPUS" -v sfx_in="$SFX" -v tm_dff="$TM_DFF" -v drvs="$DRVS" -v sz="$BLK_SZ" -v threads="$THREADS" -v procs="$JOBS" -v rdwr="$OPER" -v fio_fl="$FIO_FL" -v tm="$TM_RUN" -v iost_fl="$IO_FL" '
               BEGIN{
                 szb = sz+0;
                 tm += 0;
@@ -681,6 +726,7 @@ for MAX_DRIVES in $DRVS_LST; do
               /^__cmd / {
                 ++rn;
                 fl[rn] = FILENAME;
+                printf("fl[%d]= %s\n", rn, fl[rn]);
               }
               /^__threads / { sv[rn, "threads"] = $2; }
               /^__jobs / { sv[rn, "procs"] = $2; }
@@ -692,6 +738,7 @@ for MAX_DRIVES in $DRVS_LST; do
                 #issued rwt: total=0,571176,0, short=0,0,0, dropped=0,0,0
                 n = split(substr($3, index($3,"=")+1), arr, ",");
                 v = (arr[1] == "0" ? arr[2] : arr[1])+0;
+                sv[rn, "ios"] = v;
                 busy_str = "unk";
                 if (idle > 0 && idle_n > 0) {
                   sv[rn, "busy"] = 100 - (idle/idle_n);
@@ -764,9 +811,13 @@ for MAX_DRIVES in $DRVS_LST; do
                 if (tm == -1 && tm_act > 0) { tm = tm_act; }
                 if (unhalted_str == "") { my_unhalted_str = " ";} else { my_unhalted_str = unhalted_str;}
                 #printf("v= %s tm= %s szb= %s tm_act= %s sv_ln= %s\n", v, tm, szb, tm_act, sv_run_ln) > "/dev/stderr";
-                drvs = sv[i,"drvs"]; threads = sv[i,"threads"]; procs = sv[i,"procs"]; busy_str = sv[i,"busy_str"];
+                drvs = sv[i,"drvs"];
+                threads = sv[i,"threads"];
+                procs = sv[i,"procs"];
+                busy_str = sv[i,"busy_str"];
                 lat_ms = sv[i,"lat_ms"];
                 drv = sv[i,"drv"];
+                v = sv[i,"ios"];
                 printf("qq drives= %d oper= %s sz= %s IOPS(k)= %.3f bw(MB/s)= %.3f szKiB= %d iodepth= %d procs= %d tm_act_secs= %.4f %%busy= %s lat_ms= %f sfx= %s%sdrv= %s iostat= %s fio_fl= %s\n",
                  drvs, rdwr, sz, 0.001 * v/tm, 1e-6 * v * szb / tm, szb/1024, threads, procs, tm_act, busy_str, lat_ms, sfx_in, my_unhalted_str, drv, iost_fl, fl[i]);
                 printf("\n");
@@ -799,6 +850,8 @@ for MAX_DRIVES in $DRVS_LST; do
               fi
               #echo "$0.$LINENO bye"
               #exit 1
+              echo "vim $FIO_FL"
+              echo "vim $IO_FL"
         done # read write
       done # BLK_SZ
     done # THREADS
