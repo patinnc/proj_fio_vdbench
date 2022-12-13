@@ -10,43 +10,17 @@ if [ "$DEV" == "" ]; then
 fi
 VRB=$2
 
-DEV="$(echo "$DEV" | sed 's!/dev/!!')"
-PCI_STR="$(find /sys/devices -name $DEV | wc -l)"
-if [ "$PCI_STR" != "1" ]; then
-  echo "$0.$LINENO lookup of device retured 0 or more than 1 device for dev= $DEV. got below. bye"
-  echo "find /sys/devices -name $DEV"
-        find /sys/devices -name $DEV
-  exit 1
-fi
-PCI_STR="$(find /sys/devices -name $DEV)"
-echo "$0.$LINENO pci /sys/devices str= $PCI_STR"
-ARR=($(echo "$PCI_STR" | sed 's!/!\n!g'))
-echo "$0.$LINENO arr sz= ${#ARR[@]}"
-CLS=
-for ((i=2; i < ${#ARR[@]}; i++)); do
-  if [[ "${ARR[$i]}" == *":"* ]]; then
-    continue # pci address
-  fi
-  CLS="$CLS/${ARR[$i]}"
-done
-echo "$0.$LINENO cls= $CLS"
-CLS_DIR="/sys/class${CLS}"
-if [ ! -d "$CLS_DIR" ]; then
-  echo "$0.$LINENO failed to find pci dev= $DEV /sys/class dir. tried $CLS_DIR. bye"
-  exit 1
-fi
-echo "$0.$LINENO cls_dir=  $CLS_DIR"
-echo "$0.$LINENO ls $CLS_DIR"
-ls $CLS_DIR
-CLS_DIR_DEV="$CLS_DIR/device"
-CLS_DIR_DEV_DEV="$CLS_DIR/device/device"
-echo "$0.$LINENO ls $CLS_DIR_DEV"
-ls $CLS_DIR_DEV
 CUR_DIR="$(pwd)"
+
 prt_files_in_dir() {
+  local goto_dir="$1"
   if [ "$VRB" != "1" ]; then
     return 0
   fi
+  if [ ! -d "$goto_dir" ]; then
+    return 1
+  fi
+  cd "$goto_dir"
   local i
   local j
   local TYP
@@ -70,16 +44,78 @@ prt_files_in_dir() {
     printf "%30s %s\n" $v1 "${marr[$j]}"
   done
   done
+  cd $CUR_DIR
+  return 0
 }
+DEV="$(echo "$DEV" | sed 's!/dev/!!')"
+if [[ "$DEV" == "nvme"* ]]; then
+  DEV_MN1="$(echo "$DEV" | sed -r 's/(nvme[0-9]+)(.*)/\1/')"
+  TRY_CLS="/sys/class/nvme/$DEV_MN1"
+else
+  DEV_MN1="$DEV"
+  TRY_CLS="$(find /sys/class/ -name $DEV)"
+fi
+echo "$0.$LINENO try_cls= $TRY_CLS"
+if [ -d "$TRY_CLS" ]; then
+  CLSD="$TRY_CLS"
+fi
+echo "$0.$LINENO CLSD= $CLSD"
+prt_files_in_dir $CLSD
+#echo "$0.$LINENO dev= $DEV dem_mn1= $DEV_MN1"
+if [[ -d "$CLSD" ]] && [[ -d "$CLSD/device" ]]; then
+  PCI_STR="$CLSD/device"
+  else
+  PCI_STR="$(find /sys/devices -name $DEV)"
+  if [[ "$(echo "$PCI_STR" | wc -l)" != "1" ]]; then
+  echo "$0.$LINENO lookup of device retured 0 or more than 1 device for dev= $DEV. got below. bye"
+  echo "find /sys/devices -name $DEV"
+        find /sys/devices -name $DEV
+  exit 1
+  fi
+fi
+echo "$0.$LINENO dev= $DEV dem_mn1= $DEV_MN1  pci_str= $PCI_STR"
+#exit
+#PCI_STR="$(find /sys/devices -name $DEV | wc -l)"
+#if [ "$PCI_STR" != "1" ]; then
+#  echo "$0.$LINENO lookup of device retured 0 or more than 1 device for dev= $DEV. got below. bye"
+#  echo "find /sys/devices -name $DEV"
+#        find /sys/devices -name $DEV
+#  exit 1
+#fi
+#PCI_STR="$(find /sys/devices -name $DEV)"
+echo "$0.$LINENO pci /sys/devices str= $PCI_STR"
+ARR=($(echo "$PCI_STR" | sed 's!/!\n!g'))
+echo "$0.$LINENO arr sz= ${#ARR[@]}"
+CLS=
+for ((i=2; i < ${#ARR[@]}; i++)); do
+  if [[ "${ARR[$i]}" == *":"* ]]; then
+    continue # pci address
+  fi
+  CLS="$CLS/${ARR[$i]}"
+done
+echo "$0.$LINENO cls= $CLS"
+CLS_DIR="/sys/class${CLS}"
+if [ ! -d "$CLS_DIR" ]; then
+  echo "$0.$LINENO failed to find pci dev= $DEV /sys/class dir. tried $CLS_DIR. bye"
+  exit 1
+fi
+echo "$0.$LINENO cls_dir=  $CLS_DIR"
+echo "$0.$LINENO ls $CLS_DIR"
+ls $CLS_DIR
+if [ -d $CLS_DIR ]; then
+  prt_files_in_dir $CLS_DIR
+fi
+CLS_DIR_DEV="$CLS_DIR/device"
+CLS_DIR_DEV_DEV="$CLS_DIR/device/device"
+echo "$0.$LINENO ls $CLS_DIR_DEV"
+ls $CLS_DIR_DEV
 if [ -d $CLS_DIR_DEV ]; then
-  cd $CLS_DIR_DEV
   echo "$0.$LINENO ls $CLS_DIR_DEV"
-  prt_files_in_dir
+  prt_files_in_dir $CLS_DIR_DEV
 fi
 if [ -d $CLS_DIR_DEV_DEV ]; then
-  cd $CLS_DIR_DEV_DEV
   echo "$0.$LINENO ls $CLS_DIR_DEV_DEV"
-  prt_files_in_dir
+  prt_files_in_dir $CLS_DIR_DEV_DEV
 fi
 cd "$CUR_DIR"
 get_bw() {
@@ -105,6 +141,16 @@ if [ -e $CLS_DIR_DEV_DEV/current_link_speed ]; then
   SPD_DIR=$CLS_DIR_DEV_DEV
 else
   SPD_DIR=$CLS_DIR_DEV
+  if [ -e $CLS_DIR_DEV/current_link_speed ]; then
+    SPD_DIR=$CLS_DIR_DEV
+  else
+    if [ -e $CLS_DIR/current_link_speed ]; then
+      SPD_DIR=$CLS_DIR
+    else
+      echo "$0.$LINENO didn't find pci current_link_speed file. Can't compute pci bw."
+      exit 1
+    fi
+  fi
 fi
 echo "$0.$LINENO files cur_speed, cur_width: $SPD_DIR/current_link_speed $SPD_DIR/current_link_width"
 CUR_SPEED="$(cat $SPD_DIR/current_link_speed)"
