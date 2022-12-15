@@ -105,6 +105,11 @@ ls $CLS_DIR
 if [ -d $CLS_DIR ]; then
   prt_files_in_dir $CLS_DIR
 fi
+Q_DIR="/sys/class/block/$DEV/queue"
+echo "$0.$LINENO q_dir= /sys/class/block/$DEV/queue"
+if [ -d "$Q_DIR" ]; then
+  prt_files_in_dir $Q_DIR
+fi
 CLS_DIR_DEV="$CLS_DIR/device"
 CLS_DIR_DEV_DEV="$CLS_DIR/device/device"
 echo "$0.$LINENO ls $CLS_DIR_DEV"
