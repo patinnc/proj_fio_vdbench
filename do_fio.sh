@@ -75,7 +75,7 @@ VRB=0
 
 #fio --filename=/dev/md0 --direct=1 --size=100% --log_avg_msec=10000 --filename=fio_test_file --ioengine=libaio --name disk_fill --rw=write --bs=256k --iodepth=8
 
-while getopts "hvy-:B:c:D:f:J:L:m:O:P:p:R:r:s:t:T:x:" opt; do
+while getopts "hvy-:B:c:D:f:J:L:m:n:O:P:p:R:r:s:t:T:x:" opt; do
   case "${opt}" in
     - )
             case "${OPTARG}" in
@@ -134,6 +134,9 @@ while getopts "hvy-:B:c:D:f:J:L:m:O:P:p:R:r:s:t:T:x:" opt; do
     m )
       USE_MNT=$OPTARG
       ;;
+    n )
+      USE_NUMA=$OPTARG
+      ;;
     O )
       OPER_IN="$(echo "$OPTARG" | sed 's/,/ /g')"
       ;;
@@ -189,6 +192,7 @@ while getopts "hvy-:B:c:D:f:J:L:m:O:P:p:R:r:s:t:T:x:" opt; do
       echo "   -J jobs_list  like 1,2,16  start X jobs. This is the fio --numjobs= parameter"
       echo "   -L devices_list  like nvme0n1,nvme1n1[,...]   is the fio --numjobs= parameter"
       echo "   -m mount_point   like /mnt/disk or /disk/1    assumes the devices are mounted to this mount point and assumes -f 1 (use file system)"
+      echo "   -n 0|1  use numa if 1. default is 0. If 1 then lookup the node for the drive and pin the job to that node. Need 1 drive or -P 1"
       echo "   -O operation_list  like op1[,op2[,...]]    like randread randwrite read write or precondition. fio -rw parameter"
       echo "   -p 0|1  run 'perf stat' on fio job(s) if '-p 1'. Default is 0 (don't run perf stat)"
       echo "   -P 0|1  generate 1 set of job(s) per drive if '-P 1'. Default is generate feed all the selected drives to 1 set of jobs"
@@ -665,7 +669,9 @@ for MAX_DRIVES in $DRVS_LST; do
             OFL_ARR=()
             for drv in $DLST; do
             kk=$((kk+1))
+            V=
             if [ "$PER_DRV" == "1" ]; then
+              V="$(echo $drv |sed 's!/dev/!!;s/n1$//')"
               #if [[ "$PD_MAX" -gt "0" ]]; then
                 OFL="$(echo "$FIO_FL" | sed "s/.txt$/.$kk.txt/")"
               #fi
@@ -690,10 +696,20 @@ for MAX_DRIVES in $DRVS_LST; do
             OPT_PERF="$PERF_BIN stat -o $PRF_FL -a -e msr/tsc/,msr/mperf/,msr/aperf/ -- "
             echo "__opt_perf= $OPT_PERF fio_cmd... >> $OFL" >> $OFL
           fi
+            OPT_NUMA=
+            if [[ "$USE_NUMA" == "1" ]] && [[ "$V" != "" ]]; then
+              if [ -e /sys/class/nvme/$V/numa_node ]; then
+                NUMA_NODE="$(cat /sys/class/nvme/$V/numa_node 2> /dev/null)"
+                if [ "$NUMA_NODE" != "" ]; then
+                  OPT_NUMA="numactl -m $NUMA_NODE -N $NUMA_NODE"
+                fi
+              fi
+            fi
             #echo "$0.$LINENO drv $drv"
             #exit 1
             if [ "$DRY" == "0" ]; then
-               nohup $OPT_PERF $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS$OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA >> $OFL 2> $OFL.stderr.txt &
+               echo "$0.$LINENO nohup $OPT_PERF $OPT_NUMA $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS$OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA >> $OFL 2> $OFL.stderr.txt &" >> $OFL
+                                nohup $OPT_PERF $OPT_NUMA $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS$OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA >> $OFL 2> $OFL.stderr.txt &
                PD_PIDS="$! $PD_PIDS"
             fi
             done
