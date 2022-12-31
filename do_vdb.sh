@@ -241,7 +241,7 @@ if [ "$DRVS_LST_IN" != "" ]; then
   DRVS_LST=$DRVS_LST_IN
 fi
 if [ "$JOBS_LST_IN" != "" ]; then
-  JVMS_LST=$JOBS_LST_IN
+  JOBS_LST=$JOBS_LST_IN
 fi
 if [ "$THRD_LST_IN" != "" ]; then
   THRD_LST=$THRD_LST_IN
@@ -264,12 +264,12 @@ if [[ "$USE_RAID" != "" ]]; then
   #exit 1
 fi
 echo "DRVS_LST= $DRVS_LST"
-echo "JMVS_LST= $JVMS_LST"
+echo "JOBS_LST= $JOBS_LST"
 echo "THRD_LST= $THRD_LST"
 echo "BLK_LST= $BLK_LST"
 echo "OPER_LST= $OPER_LST"
 for MAX_DRIVES in $DRVS_LST; do
-  for JVMS in $JVMS_LST; do
+  for JOBS in $JOBS_LST; do
     for THREADS in $THRD_LST; do
     
     VDBENCHDEVICES=$(lsblk -dnp -oNAME | grep nvme | sort)
@@ -322,7 +322,7 @@ for MAX_DRIVES in $DRVS_LST; do
     #exit 1
     
     
-      for ii in $BLK_LST; do
+      for BLK_SZ in $BLK_LST; do
         for OPER in $OPER_LST; do
           if [ "$OPER" == "precondition" ]; then
             echo "$0.$LINENO this script doesn't support oper= $OPER. bye"
@@ -392,7 +392,7 @@ rd=rd1,wd=wd1,openflags=o_direct,forrdpct=($rdwr),iorate=max,threads=$files_thre
 fwd=fwd1,fsd=fsd1,xfersize=$xfer_sz,fileio=$seq_rnd,fileselect=random,threads=$files_threads
 rd=rd1,fwd=fwd1,openflags=o_direct,foroperations=($rdwr),fwdrate=max,format=yes,elapsed=$elap_secs,interval=1' >> $FL_CFG
           fi
-          i="${ii}_${OPER}"
+          i="${BLK_SZ}_${OPER}"
           if [ "$RAW" == "1" ]; then
             if [[ "$OPER" == *"read"* ]]; then
               RDWR_STR="100"
@@ -408,9 +408,7 @@ rd=rd1,fwd=fwd1,openflags=o_direct,foroperations=($rdwr),fwdrate=max,format=yes,
           fi
       
       
-          arr=(${i//_/ })
-          #SZ=${arr[0]}
-          SZ=$ii
+          SZ=$BLK_SZ
           RS=sequential
           if [[ "${OPER}" == *"ran"* ]]; then
             RS=random
@@ -421,7 +419,6 @@ rd=rd1,fwd=fwd1,openflags=o_direct,foroperations=($rdwr),fwdrate=max,format=yes,
             FL_SZ_STR="file_sz=$FILE_SZ"
           fi
           echo sz= ${SZ} rs= ${RS}
-          #continue
           
           SFX="_${SZ}_${OPER}${SFX_IN}"
           ODIR=vdb_data/vdb_out${SFX}
@@ -439,9 +436,9 @@ rd=rd1,fwd=fwd1,openflags=o_direct,foroperations=($rdwr),fwdrate=max,format=yes,
           if [ -e $OFL ]; then
             rm $OFL
           fi
-          OPT_JVMS=
-          if [ "$JVMS" != "" ]; then
-            OPT_JVMS="-m $JVMS"
+          OPT_JOBS=
+          if [ "$JOBS" != "" ]; then
+            OPT_JOBS="-m $JOBS"
           fi
           OPT_PERF=
           PRF_FL=
@@ -453,14 +450,14 @@ rd=rd1,fwd=fwd1,openflags=o_direct,foroperations=($rdwr),fwdrate=max,format=yes,
           if [ "$USE_MNT" != "" ]; then
             OPT_MNT="use_mnt=$USE_MNT"
           fi
-          echo "$VDB_CMD $OPT_JVMS -f $FL_CFG -o $ODIR $FL_SZ_STR $OPT_MNT files_threads=$THREADS seq_rnd=$RS xfer_sz=$SZ elap_secs=$ELAP_SECS rdwr=$RDWR_STR > $OFL"
+          echo "$VDB_CMD $OPT_JOBS -f $FL_CFG -o $ODIR $FL_SZ_STR $OPT_MNT files_threads=$THREADS seq_rnd=$RS xfer_sz=$SZ elap_secs=$ELAP_SECS rdwr=$RDWR_STR > $OFL"
           if [ "$DRY" == "0" ]; then
-            echo  __cmd $VDB_CMD $OPT_JVMS -f $FL_CFG -o $ODIR $FL_SZ_STR $OPT_MNT files_threads=$THREADS seq_rnd=$RS xfer_sz=$SZ elap_secs=$ELAP_SECS rdwr=$RDWR_STR > $OFL
+            echo  __cmd $VDB_CMD $OPT_JOBS -f $FL_CFG -o $ODIR $FL_SZ_STR $OPT_MNT files_threads=$THREADS seq_rnd=$RS xfer_sz=$SZ elap_secs=$ELAP_SECS rdwr=$RDWR_STR > $OFL
             echo "__beg_cfg $FL_CFG" >> $OFL
             cat  $FL_CFG | awk '{printf("__cfg %s\n", $0);}' >> $OFL
             echo "__end_cfg $FL_CFG" >> $OFL
             echo "__threads $THREADS" >> $OFL
-            echo "__jvms $JVMS" >> $OFL
+            echo "__jvms $JOBS" >> $OFL
             echo "__raw $RAW" >> $OFL
             echo "__drives $DRVS" >> $OFL
             echo "__drv $DRV_STR" >> $OFL
@@ -468,7 +465,7 @@ rd=rd1,fwd=fwd1,openflags=o_direct,foroperations=($rdwr),fwdrate=max,format=yes,
             echo "__seq_rnd $RS" >> $OFL
             echo "__oper $OPER" >> $OFL
             echo "__elap_secs $ELAP_SECS" >> $OFL
-            $OPT_PERF $VDB_CMD $OPT_JVMS -f $FL_CFG -o $ODIR $FL_SZ_STR $OPT_MNT files_threads=$THREADS seq_rnd=$RS xfer_sz=$SZ elap_secs=$ELAP_SECS rdwr=$RDWR_STR >> $OFL
+            $OPT_PERF $VDB_CMD $OPT_JOBS -f $FL_CFG -o $ODIR $FL_SZ_STR $OPT_MNT files_threads=$THREADS seq_rnd=$RS xfer_sz=$SZ elap_secs=$ELAP_SECS rdwr=$RDWR_STR >> $OFL
             pkill -SIGTERM iostat
             cp $OFL $ODIR/
             grep "^__" $OFL > v_res.txt
@@ -485,79 +482,7 @@ rd=rd1,fwd=fwd1,openflags=o_direct,foroperations=($rdwr),fwdrate=max,format=yes,
               }
               END{ printf("\n");}
             ' $OFL >> v_res.txt
-            awk -v sfx="$SFX" -v num_cpus="$NUM_CPUS" -v perf_fl="$PRF_FL" -v tm_dff="$ELAP_SECS" -v drvs="$DRVS" -v sz="$SZ" -v threads="$THREADS" -v procs="$JVMS" -v rdwr="$OPER" -v fio_fl="$OFL" -v tm="$ELAP_SECS" -v iost_fl="$IO_FL" -v drv_str="$DRV_STR" '
-                BEGIN{
-                  szb = sz+0;
-                  if (index(sz, "k") > 0) { szb *= 1024;}
-                  if (index(sz, "m") > 0) { szb *= 1024*1024;}
-                  tm += 0;
-                }
-                /msr\/tsc\// {
-                  if ($2 == "msr/tsc/") { v=$1; gsub(/,/, "", v); tsc = v+0;}
-                }
-                /msr\/mperf\// {
-                  if ($2 == "msr/mperf/") { v=$1; gsub(/,/, "", v); mperf = v+0;}
-                }
-                /msr\/aperf\// {
-                  if ($2 == "msr/aperf/") { v=$1; gsub(/,/, "", v); aperf = v+0;}
-                }
-                / seconds time elapsed/ {
-                  gsub(/,/, "", $1);
-                  perf_elapsed_secs = $1+0;
-                  if (tsc > 0 && mperf > 0 && num_cpus > 0) {
-                    tsc_freq_ghz = 1e-9 * tsc/perf_elapsed_secs/num_cpus;
-                    cpu_freq_ghz = tsc_freq_ghz * aperf / mperf;
-                    unhalted_ratio = mperf / tsc;
-                    unhaltedTL = unhalted_ratio * 100 * num_cpus;
-                    # str below needs to start and end with space
-                    unhalted_str = sprintf(" %%unhalted= %.3f unhaltedTL= %.3f cpu_freqGHz= %.3f ", 100 * unhalted_ratio, unhaltedTL, cpu_freq_ghz);
-                  }
-                }
-  
-                /^__seq_rnd /{ if ($2 == "100" || $2 == "random") { oper_rand_seq = "rand"; } else { oper_rand_seq = ""; }}
-                /Starting RD=/{ 
-                  for (i=2; i <= NF; i++) {
-                    if (index($i, "=") > 0) {
-                      n = split($i, arr, "=");
-                      if (arr[1] == "rdpct") {
-                        if (arr[2] == "100") { oper_rw = "read"; } else {oper_rw = "write";}
-                      }
-                      if (arr[1] == "threads") {
-                        threads = arr[2];
-                      }
-                    }
-                  }
-                  rdwr = oper_rand_seq "" oper_rw;
-                }
-                / avg_2-/{ 
-                  kiops= 0.001* $3;
-                  MBps= $4 * (1024*1024)/(1000*1000);
-                  busy= $14; # cpu%
-                  busy_str= $14; # cpu%
-                  lat_ms = $7;
-                  if (unhalted_str == "") { my_unhalted_str = " ";} else { my_unhalted_str = unhalted_str;}
-                  printf("qq drives= %d oper= %s sz= %s IOPS(k)= %.3f bw(MB/s)= %.3f szKiB= %d iodepth= %d procs= %d tm_dff_secs= %d %%busy= %s lat_ms= %f sfx= %s%sdrv= %s iostat= %s fio_fl= %s\n",
-                   drvs, rdwr, sz, kiops, MBps, szb/1024, threads, procs, tm_dff, busy_str, lat_ms, sfx, my_unhalted_str, drv_str, iost_fl, fio_fl);
-                }
-                /issued rwt: total=|issued rwts: total=/ {
-                  #issued rwt: total=0,571176,0, short=0,0,0, dropped=0,0,0
-                  n = split(substr($3, index($3,"=")+1), arr, ",");
-                  v = (arr[1] == "0" ? arr[2] : arr[1])+0;
-                  busy_str = "unk";
-                  if (idle > 0 && idle_n > 0) {
-                    busy = 100 - (idle/idle_n);
-                    busy_str = sprintf("%.3f", busy);
-                  }
-                  printf("qq drives= %d oper= %s sz= %s IOPS(k)= %.3f bw(MB/s)= %.3f szKiB= %d iodepth= %d procs= %d tm_dff_secs= %d %%busy= %s drv= %s iostat= %s fio_fl= %s\n",
-                   drvs, rdwr, sz, 0.001 * v/tm, 1e-6 * v * szb / tm, szb/1024, threads, procs, tm_dff, busy_str, drv_str, iost_fl, fio_fl);
-                }
-                /avg-cpu:.* %user.* %nice.* %system.* %iowait.* %steal.*%idle/ {
-                  getline;
-                  idle += $NF;
-                  idle_n++;
-                }
-                END{ printf("\n");}
-            ' $PRF_FL $IO_FL v_res.txt > v_res1.txt
+            awk -v sfx="$SFX" -v num_cpus="$NUM_CPUS" -v perf_fl="$PRF_FL" -v tm_dff="$ELAP_SECS" -v drvs="$DRVS" -v sz="$SZ" -v threads="$THREADS" -v procs="$JOBS" -v rdwr="$OPER" -v fio_fl="$OFL" -v tm="$ELAP_SECS" -v iost_fl="$IO_FL" -v drv_str="$DRV_STR" -f $SCR_DIR/do_vdb_rd_output.awk $PRF_FL $IO_FL v_res.txt > v_res1.txt
             cat v_res1.txt >> v_res.txt
             cat v_res.txt
             cat v_res.txt >> v_all.txt
@@ -585,7 +510,7 @@ rd=rd1,fwd=fwd1,openflags=o_direct,foroperations=($rdwr),fwdrate=max,format=yes,
         done # OPER_LST
       done # BLK_LST
     done # THREADS in THRD_LST
-  done # JVMS in JVMS_LST
+  done # JOBS in JOBS_LST
 done # MAX_DRIVES in DRVS_LST
 echo "qq done"
 echo "qq done" >&2
