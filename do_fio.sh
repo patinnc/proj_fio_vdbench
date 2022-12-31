@@ -72,10 +72,11 @@ DRY=1  # dry_run true, don't run fio, don't run iostat, but dirs and output file
 DRY=  # force specifying on cmdline
 TM_RUN=60
 VRB=0
+WORK_LST_IN="fio"
 
 #fio --filename=/dev/md0 --direct=1 --size=100% --log_avg_msec=10000 --filename=fio_test_file --ioengine=libaio --name disk_fill --rw=write --bs=256k --iodepth=8
 
-while getopts "hvy-:B:c:D:f:J:L:m:n:O:P:p:R:r:s:t:T:x:" opt; do
+while getopts "hvy-:B:c:D:f:J:L:m:n:O:P:p:R:r:s:t:T:W:x:" opt; do
   case "${opt}" in
     - )
             case "${OPTARG}" in
@@ -164,6 +165,9 @@ while getopts "hvy-:B:c:D:f:J:L:m:n:O:P:p:R:r:s:t:T:x:" opt; do
     v )
       VRB=$((VRB+1))
       ;;
+    W )
+      WORK_LST_IN="$(echo "$OPTARG" | sed 's/,/ /g')"
+      ;;
     x )
       XTRA_OPT="$OPTARG"
       ;;
@@ -190,6 +194,9 @@ while getopts "hvy-:B:c:D:f:J:L:m:n:O:P:p:R:r:s:t:T:x:" opt; do
       echo "   -f file_system_use   0 to not use file system or 1 to use file system."
       echo "   -h     this help info"
       echo "   -J jobs_list  like 1,2,16  start X jobs. This is the fio --numjobs= parameter"
+      echo "      For vdbench you can add the number of jvms to start by adding {x} to start x number of jvms."
+      echo "      For vdbench the 1st 'number' is the number of regions for each drive"
+      echo "      and the 2nd number is the number of jvms to start. The vdb default is to start jvms == regions."
       echo "   -L devices_list  like nvme0n1,nvme1n1[,...]   is the fio --numjobs= parameter"
       echo "   -m mount_point   like /mnt/disk or /disk/1    assumes the devices are mounted to this mount point and assumes -f 1 (use file system)"
       echo "   -n 0|1  use numa if 1. default is 0. If 1 then lookup the node for the drive and pin the job to that node. Need 1 drive or -P 1"
@@ -201,6 +208,7 @@ while getopts "hvy-:B:c:D:f:J:L:m:n:O:P:p:R:r:s:t:T:x:" opt; do
       echo "   -s suffix_to_add_to_filenames   a string that will be added to file names"
       echo "   -t time_in_secs                 time for each operation. fio --runtime= parameter"
       echo "   -T thread_list    like 1[,2[,...]]  threads per job. fio --iodepth= parameter"
+      echo "   -W work_typ_list  like fio[,vdb]  default is fio."
       echo "   -v     verbose"
       echo "   -x \"fio options\"    options passed to fio"
       echo "   -y     accept license and acknowledge you may wipe out disks"
@@ -246,8 +254,10 @@ if [[ "$USE_FS" == "1" ]]; then
   RAW=0
 fi
 if [[ "$RAW" == "1" ]]; then
-  echo "$0.$LINENO got RAW == 1 so setting USE_FS= 0"
-  USE_FS=0
+  if [[ "$USE_FS" == "1" ]]; then
+    echo "$0.$LINENO got RAW == 1 so setting USE_FS= 0"
+    USE_FS=0
+  fi
 fi
 
 if [[ "$VRB" -gt "0" ]]; then
@@ -269,7 +279,7 @@ if [[ "$VRB" -gt "0" ]]; then
   echo "$0.$LINENO VRB= $VRB "
 fi
 
-$SCR_DIR/../60secs/set_freq.sh -g performance
+sudo $SCR_DIR/../60secs/set_freq.sh -g performance
 ulimit -Sn 500000
 
 if [[ "$DRY" != "0" ]] && [[ "$DRY" != "1" ]]; then
@@ -293,7 +303,7 @@ if [ "$RAW" == "1" ]; then
   if [ "$LST_DEVS_IN" != "" ]; then
     NEW_LST=
     SEP=
-    for i in `echo $VDBENCHDEVICES`;do 
+    for i in `echo $VDBENCHDEVICES`; do 
       for j in $LST_DEVS_IN; do
         if [[ "$i" == "$j" ]] || [[ "$i" == "/dev/$j" ]]; then
           got_it=1
@@ -315,19 +325,19 @@ if [ "$RAW" == "1" ]; then
     fi
     VDBENCHDEVICES=$NEW_LST
   fi
-  WRITABLE_DEVICES=$(for i in `echo $VDBENCHDEVICES`;do 
+  WRITABLE_DEVICES=$(for i in `echo $VDBENCHDEVICES`; do 
      lsblk $i -bnp -o MOUNTPOINT -J | jq '.blockdevices[].mountpoint' | sed 's/"//g'
   done | sort | uniq)
   CK_NULL=$(echo "$WRITABLE_DEVICES")
   if [[ "$USE_FS" == "0" ]] && [[ "$CK_NULL" != "null" ]]; then
     echo "$0.$LINENO for raw IO the disks can't be mounted. got mountpoints:"
-    for i in `echo $VDBENCHDEVICES`;do 
+    for i in `echo $VDBENCHDEVICES`; do 
       lsblk $i -bnp -o MOUNTPOINT -J | jq '.blockdevices[].mountpoint' | sed 's/"//g'
     done
     exit 1
   fi
   if [[ "$USE_FS" == "1" ]] && [[  "$CK_NULL" == "null" ]]; then
-    for i in `echo $VDBENCHDEVICES`;do 
+    for i in `echo $VDBENCHDEVICES`; do 
       lsblk $i -bnp -o MOUNTPOINT -J | jq '.blockdevices[].mountpoint' | sed 's/"//g'
     done
     echo "$0.$LINENO got use_fs= $USE_FS and no mount point"
@@ -335,7 +345,7 @@ if [ "$RAW" == "1" ]; then
   fi
 fi
 if [ "$RAW" == "0" ]; then
-  WRITABLE_DEVICES=$(for i in `echo $VDBENCHDEVICES`;do 
+  WRITABLE_DEVICES=$(for i in `echo $VDBENCHDEVICES`; do 
      lsblk $i -bnp -o MOUNTPOINT -J | jq '.blockdevices[].mountpoint' | sed 's/"//g'
   done | sort | uniq | grep -v null)
      #lsblk $i -bnp -o MOUNTPOINT -J | jq '.blockdevices[].mountpoint' | sed 's/"//g'
@@ -343,7 +353,7 @@ if [ "$RAW" == "0" ]; then
   CK_NULL=$(echo "$WRITABLE_DEVICES")
   echo "$0.$LINENO ck_null= $CK_NULL"
   if [[ "$USE_FS" == "1" ]] && [[  "$CK_NULL" == "null" ]]; then
-    for i in `echo $VDBENCHDEVICES`;do 
+    for i in `echo $VDBENCHDEVICES`; do 
       lsblk $i -bnp -o MOUNTPOINT -J | jq '.blockdevices[].mountpoint' | sed 's/"//g'
     done
     echo "$0.$LINENO got use_fs= $USE_FS and no mount point"
@@ -403,10 +413,6 @@ echo "$0.$LINENO VDBENCHDEVICES= $VDBENCHDEVICES"
 #echo "$0.$LINENO got to here"
 
 RUNS_IN_LOOP=0
-FIO_DIR="fio_data"
-if [ ! -d "$FIO_DIR" ]; then
-  mkdir -p "$FIO_DIR"
-fi
 IOSTAT_DIR="iostat_data"
 if [ ! -d "$IOSTAT_DIR" ]; then
   mkdir -p "$IOSTAT_DIR"
@@ -477,7 +483,33 @@ echo "$0.$LINENO JOBS_LST= $JOBS_LST"
 echo "$0.$LINENO THRD_LST= $THRD_LST"
 echo "$0.$LINENO BLK_LST= $BLK_LST"
 echo "$0.$LINENO OPER_LST= $OPER_LST"
-for MAX_DRIVES in $DRVS_LST; do
+DO_SUDO=
+if [[ "$RAW" == "1" ]] || [[ "$PERF_IN" == "1" ]]; then
+  DO_SUDO="sudo"
+fi
+for WORK_TYP in $WORK_LST_IN; do
+ if [ "$DRVS_LST" == "" ]; then
+   echo "$0.$LINENO DRVS_LST is empty. check -D num_drives and -L drv0[,drv1...] otions. bye"
+   exit 1
+ fi
+ if [ "$WORK_TYP" == "vdb" ]; then
+   VDB_CMD=$SCR_DIR/../vdbench50407/vdbench
+   if [ ! -e "$VDB_CMD" ]; then
+     echo "$0.$LINENO can't find vdbench script. Tried $VDB_CMD. Bye"
+     exit 1
+   fi
+ else
+   if [ "$WORK_TYP" != "fio" ]; then
+     echo "$0.$LINENO -W work_typ_list must be fio and vdb. got $WORK_TYP. bye"
+     exit 1
+   fi
+ fi
+ FIO_DIR="${WORK_TYP}_data"
+ if [ ! -d "$FIO_DIR" ]; then
+   mkdir -p "$FIO_DIR"
+ fi
+
+ for MAX_DRIVES in $DRVS_LST; do
   j=0
   DRV=
   SEP=
@@ -514,10 +546,13 @@ for MAX_DRIVES in $DRVS_LST; do
     DRV=$RAID_DEV
   fi
   echo "$0.$LINENO DRV= $DRV"
+  if [ "$USE_RAID" == "" ]; then
+    USE_RAID="0"
+  fi
 
   OPT_FSZ=
   if [[ "$USE_FS" == "1" ]] && [[ "$MNT_PT" != "" ]]; then
-   DRV="$MNT_PT/fio_data"
+   DRV="$MNT_PT/${WORK_TYP}_data"
    OPT_FSZ="--size 3072G"
    OPT_FSZ="--size 100G"
    DRVS=1
@@ -528,9 +563,41 @@ for MAX_DRIVES in $DRVS_LST; do
   #echo "$0.$LINENO DRV= $DRV"
   #exit 1
   #echo "$0.$LINENO IO_DSK_LST= $IO_DSK_LST"
+  if [ "$JOBS_LST" == "" ]; then
+    echo "$0.$LINENO JOBS_LST is empty. check -J num[,num2...] option . bye"
+    exit 1
+  fi
   for JOBS in $JOBS_LST; do
+    VDB_JVMS=
+    if [[ "$JOBS" == *"{"* ]]; then
+      arr=($(echo "${JOBS}" | sed 's/{/ /;s/}//'))
+      if [ "${#arr[@]}" != "2" ]; then
+        echo "$0.$LINENO got { in $JOBS, arr#= ${#arr[@]}, arr0= ${arr[0]} arr1= ${arr[1]}. expected 2 entries. use arg like -J 4{2} for 4 jobs and 2 vdb jvms.bye"
+        exit 1
+      fi
+      JOBS=${arr[0]}
+      VDB_JVMS=${arr[1]}
+    else
+      if [ "$WORK_TYP" == "vdb" ]; then
+        VDB_JVMS=${JOBS}
+      fi
+    fi
+    #echo "$0.$LINENO jobs= $JOBS. bye"
+    #exit 1
+    if [ "$THRD_LST" == "" ]; then
+      echo "$0.$LINENO THRD_LST is empty. check -T num[,num2...] option . bye"
+      exit 1
+    fi
     for THREADS in $THRD_LST; do
+      if [ "$BLK_LST" == "" ]; then
+        echo "$0.$LINENO BLK_LST is empty. check -B blk_sz1[,blk_sz2...] option . bye"
+        exit 1
+      fi
       for BLK_SZ in $BLK_LST; do
+        if [ "$OPER_LST" == "" ]; then
+          echo "$0.$LINENO OPER_LST is empty. check -O read[,oper2...] option . bye"
+          exit 1
+        fi
         for OPER in $OPER_LST; do
           SFX="_${BLK_SZ}_${OPER}${SFX_IN}"
           OFL="f_rep${SFX}.txt"
@@ -544,9 +611,9 @@ for MAX_DRIVES in $DRVS_LST; do
           #fi
           
           IO_FL=$(printf "%s/iostat%s_%.3djobs_%.3dthrds_%ddrvs_%draid_%draw_%dfs.txt" $IOSTAT_DIR ${SFX} ${JOBS} ${THREADS} ${DRVS} ${USE_RAID} ${RAW} ${USE_FS})
-          FIO_FL=$(printf "%s/fio%s_%.3djobs_%.3dthrds_%ddrvs_%draid_%draw_%dfs.txt" $FIO_DIR ${SFX} ${JOBS} ${THREADS} ${DRVS} ${USE_RAID} ${RAW} ${USE_FS})
-          if [ -e $FIO_FL ]; then
-            rm $FIO_FL
+          OUT_FL=$(printf "%s/${WORK_TYP}%s_%.3djobs_%.3dthrds_%ddrvs_%draid_%draw_%dfs.txt" $FIO_DIR ${SFX} ${JOBS} ${THREADS} ${DRVS} ${USE_RAID} ${RAW} ${USE_FS})
+          if [ -e $OUT_FL ]; then
+            rm $OUT_FL
           fi
           SV_TM_RUN=$TM_RUN
           if [[ "$OPER" == "precondition" ]] && [[ "$GOT_PRECOND" == "0" ]]; then
@@ -567,14 +634,14 @@ for MAX_DRIVES in $DRVS_LST; do
             kk=$((kk+1))
           done
           PD_MAX=$kk
-          OFL=$FIO_FL
-          OFL_RT="$(echo "$FIO_FL" | sed 's/.txt$//')"
+          OFL=$OUT_FL
+          OFL_RT="$(echo "$OUT_FL" | sed 's/.txt$//')"
           if [[ "$OFL_RT" != "" ]] && [[ "$(ls -1 $OFL_RT* 2> /dev/null | wc -l)" -gt "0" ]]; then
             echo "$0.$LINENO rm $OFL_RT*"
                              rm $OFL_RT*
           fi
 
-          # ===================== preconditioning ==============
+          # ===================== preconditioning beg ==============
           if [[ "$OPER" == "precondition" ]] && [[ "$GOT_PRECOND" == "0" ]] && [[ "$RAW" == "1" ]] && [[ "$USE_RAID" == "" ]]; then
             GOT_PRECOND=1
             OPT_COUNT=
@@ -604,9 +671,9 @@ for MAX_DRIVES in $DRVS_LST; do
             for jj in $DLST; do
               kk=$((kk+1))
               echo $0.$LINENO start precond of drive $jj > $OFL.$kk
-              echo nvme format $jj -s 1
-              echo nvme format $jj -s 1 >> $OFL.$kk
-                   nvme format $jj -s 1 >> $OFL.$kk
+              echo sudo nvme format $jj -s 1
+              echo sudo nvme format $jj -s 1 >> $OFL.$kk
+                   sudo nvme format $jj -s 1 >> $OFL.$kk
             done
             PREC_SZ=" --size=100% "
             if [ "$COUNT_BLKS_IN" != "" ]; then
@@ -618,8 +685,8 @@ for MAX_DRIVES in $DRVS_LST; do
             for jj in $DLST; do
             kk=$((kk+1))
             PRECOND_OFILES="$OFL.$kk $PRECOND_OFILES"
-            echo __cmd $FIO_BIN --filename=$jj $OPT_THR --direct=1 $OPT_REP --rw=write --bs=$PC_BLK_SZ --ioengine=libaio --iodepth=32 $PREC_SZ --numjobs=1 --group_reporting --name=precondition --eta-newline=1 --loops=2
-            echo __cmd $FIO_BIN --filename=$jj $OPT_THR --direct=1 $OPT_REP --rw=write --bs=$PC_BLK_SZ --ioengine=libaio --iodepth=32 $PREC_SZ --numjobs=1 --group_reporting --name=precondition --eta-newline=1 --loops=2 >> $OFL.$kk
+            echo __cmd sudo $FIO_BIN --filename=$jj $OPT_THR --direct=1 $OPT_REP --rw=write --bs=$PC_BLK_SZ --ioengine=libaio --iodepth=32 $PREC_SZ --numjobs=1 --group_reporting --name=precondition --eta-newline=1 --loops=2
+            echo __cmd sudo $FIO_BIN --filename=$jj $OPT_THR --direct=1 $OPT_REP --rw=write --bs=$PC_BLK_SZ --ioengine=libaio --iodepth=32 $PREC_SZ --numjobs=1 --group_reporting --name=precondition --eta-newline=1 --loops=2 >> $OFL.$kk
             echo "__threads $THREADS" >> $OFL.$kk
             echo "__jobs 1" >> $OFL.$kk
             echo "__raw 1" >> $OFL.$kk
@@ -631,7 +698,7 @@ for MAX_DRIVES in $DRVS_LST; do
             echo "__size $COUNT_BLKS_IN" >> $OFL.$kk
             RUNS_IN_LOOP=$((RUNS_IN_LOOP+1))
             if [ "$DRY" == "0" ]; then
-                  nohup $OPT_PERF $FIO_BIN --filename=$jj $OPT_THR --direct=1 $OPT_REP --rw=write --bs=$PC_BLK_SZ --ioengine=libaio --iodepth=32 $PREC_SZ --numjobs=1 --group_reporting --name=precondition --eta-newline=1 --loops=2 >> $OFL.$kk 2> $OFL.stderr.$kk &
+                  sudo nohup $OPT_PERF $FIO_BIN --filename=$jj $OPT_THR --direct=1 $OPT_REP --rw=write --bs=$PC_BLK_SZ --ioengine=libaio --iodepth=32 $PREC_SZ --numjobs=1 --group_reporting --name=precondition --eta-newline=1 --loops=2 >> $OFL.$kk 2> $OFL.stderr.$kk &
                   PRECOND_PIDS="$! $PRECOND_PIDS"
             fi
             done
@@ -639,6 +706,7 @@ for MAX_DRIVES in $DRVS_LST; do
             PRECOND_OFL_MAX=$kk
             if [ "$PRECOND_PIDS" != "" ]; then
               wait $PRECOND_PIDS
+              sudo chmod go+rw $OFL*
             fi
             jobs
             echo "$0.$LINENO after doing preconditioning stdout files are below before concat into $OFL:"
@@ -647,6 +715,7 @@ for MAX_DRIVES in $DRVS_LST; do
             #echo "$0.$LINENO after doing preconditioning new $OFL"
             #cat $OFL
           fi
+          # ===================== preconditioning end ==============
 
           # ===================== not preconditioning ==============
           TM_RUN=$SV_TM_RUN
@@ -657,8 +726,173 @@ for MAX_DRIVES in $DRVS_LST; do
             OPT_XTRA=$XTRA_OPT
           fi
           PRF_FL=
-          OFL=$FIO_FL
+          OFL=$SCR_DIR/$OUT_FL
           OFL_LST=
+          if [ "$WORK_TYP" == "vdb" ]; then
+            if [ "$PER_DRV" != "1" ]; then
+              DLST="$DRV"
+            fi
+            # JVMS_IN_CFG: if 0 then use -m jvms vdbench cmd line option (doesn't help).
+            # if 1 then do hd=default,jvms= jobs, again no help.
+            # if 2 then split disk into jobs ranges. This helps.
+            JVMS_IN_CFG=2
+            kk=-1
+            OFL_ARR=()
+            RT_FL_CFG=vdb_gen.cfg
+            V=$(find $SCR_DIR -maxdepth 1 -name "${RT_FL_CFG}*"|wc -l)
+            if [[ "$V" -gt "0" ]]; then
+              rm ${RT_FL_CFG}*
+            fi
+            for drv in $DLST; do
+              kk=$((kk+1))
+              V=
+              if [ "$PER_DRV" == "1" ]; then
+                V="$(echo $drv |sed 's!/dev/!!;s/n1$//')"
+                #if [[ "$PD_MAX" -gt "0" ]]; then
+                #  OFL="$(echo "$OUT_FL" | sed "s/.txt$/.$kk.txt/")"
+                #fi
+                FL_CFG=$SCR_DIR/${RT_FL_CFG}.$kk
+              else
+                FL_CFG=$SCR_DIR/${RT_FL_CFG}.$kk
+              fi
+            VDBENCHGBBUFFER=10
+            SEP2=
+            DRV_STR=
+            if [ "$RAW" == "1" ]; then
+              j=0
+              #echo "ios_per_jvm=1000000,dedupratio=1" >> $FL_CFG
+              #echo "ios_per_jvm=1000000" >> $FL_CFG
+              #echo "messagescan=no" >> $FL_CFG
+              if [ "$JVMS_IN_CFG" == "1" ]; then
+                if [ "$JOBS" != "" ]; then
+                  echo "hd=default,jvms=$JOBS" >> $FL_CFG
+                fi
+              fi
+              IO_DSK_LST=
+              for i in `echo $VDBENCHDEVICES`; do
+                #echo sd=sd$SD,lun=$j/vdbench.data,size=$(($FILESYSTEMSIZE-$VDBENCHGBBUFFER))G
+                DNUM=$(echo $i | sed 's/.*nvme//;s/n1$//')
+                TRY_DEV="nvme${DNUM}c${DNUM}n1"
+                if [ ! -e /sys/class/nvme/nvme${DNUM}/$TRY_DEV ]; then
+                  TRY_DEV="nvme${DNUM}n1"
+                fi
+                echo "$0.$LINENO ck_drv $drv is == $i"
+                if [[ "$drv" != *"$i"* ]]; then
+                  continue
+                fi
+                echo "$0.$LINENO vdb use drv $i"
+                IO_DSK_LST="${IO_DSK_LST}${SEP2}${TRY_DEV}"
+                DRV_STR="$i${SEP2}${DRV_STR}"
+                SEP2=","
+                #IO_DSK_LST="$IO_DSK_LST nvme${j}c${j}n1"
+                # nvme0c0n1
+                if [ "$RAW" == "1" ]; then
+                  SZ=$(nvme list -o json | awk -v drv="$i" -v vdb_buf="$VDBENCHGBBUFFER" '
+                    /DevicePath/ {
+                      if ($3 == "\""drv"\",") {
+                        got_it=1;
+                        #printf("got drv= %s\n", $0) > "/dev/stderr";
+                      }
+                    }
+                    /UsedBytes/ {
+                      if (got_it == 1) {
+                        v = $3 + 0;
+                        v /= (1024*1024*1024);
+                        v -= vdb_buf;
+                        printf("%.0f", v);
+                        #printf("got_drv_size= %s line[%s]= %s\n", v, NR, $0) > "/dev/stderr";
+                        exit(0);
+                      }
+                    }
+                  ')
+                  #echo "sd=sd${j},lun=$i,size=${SZ}g" >> $FL_CFG
+                  if [ "$JVMS_IN_CFG" == "2" ]; then
+                    awk -v j="$j" -v jobs="$JOBS" -v lun="$i" '
+                    BEGIN{
+                      rc = 0;
+                      if ((jobs+0) <= 0) {
+                        printf("jobs has to > 0. got jobs= \"%s\". Use -J jobs_list. bye\n", jobs) > "/dev/stderr";
+                        rc = 1;
+                        exit(rc);
+                      }
+                      rng_incr = 100/jobs;
+                      printf("sd=sd%s jobs= %s lun=%s range_incr= %s\n", j, jobs, lun, rng_incr) > "/dev/stderr";
+                      for (i=1; i <= jobs; i++) {
+                        printf("sd=sd%s_%s,lun=%s,range=(%.0f,%.0f)\n", j, i, lun, (i-1)*rng_incr, i*rng_incr);
+                      }
+                      exit(rc);
+                    }
+                    END{ exit(rc); }' >> $FL_CFG
+                    ck_last_rc $? $LINENO
+                  else
+                    echo "sd=sd${j},lun=$i" >> $FL_CFG
+                  fi
+                else
+                  FILESYSTEMSIZE=$(df $i --output=avail -B G | tail -1 | sed 's/G//g')
+                  echo "FILESYSTEMSIZE= $FILESYSTEMSIZE"
+                  echo "sd=sd${j},lun=$i,size=$((FILESYSTEMSIZE-VDBENCHGBBUFFER))g" >> $FL_CFG
+                fi
+                #echo "sd=sd${j},lun=$i,size=$((FILESYSTEMSIZE-VDBENCHGBBUFFER))g" >> $FL_CFG
+                j=$((j+1))
+                if [[ "$j" -ge "$MAX_DRIVES" ]]; then
+                  break
+                fi
+              done
+              DRVS=$j
+              #echo 'wd=wd1,sd=sd*,xfersize=$xfer_sz,seekpct=$seq_rnd
+        #rd=rd1,wd=wd1,openflags=o_direct,forrdpct=(100,0),iorate=max,threads=$files_threads,elapsed=$elap_secs,interval=1' >> $FL_CFG
+              echo 'wd=wd1,sd=sd*,xfersize=$xfer_sz,seekpct=$seq_rnd' >> $FL_CFG
+              echo 'rd=rd1,wd=wd1,openflags=o_direct,forrdpct=($rdwr),iorate=max,threads=$files_threads,elapsed=$elap_secs,interval=1' >> $FL_CFG
+            else
+              echo 'fsd=fsd1,anchor=$use_mnt/vd_dir,depth=1,width=1,files=$files_threads,size=$file_sz' >> $FL_CFG
+              echo 'fwd=fwd1,fsd=fsd1,xfersize=$xfer_sz,fileio=$seq_rnd,fileselect=random,threads=$files_threads' >> $FL_CFG
+              echo 'rd=rd1,fwd=fwd1,openflags=o_direct,foroperations=($rdwr),fwdrate=max,format=yes,elapsed=$elap_secs,interval=1' >> $FL_CFG
+            fi
+            i="${BLK_SZ}_${OPER}"
+            if [ "$RAW" == "1" ]; then
+              if [[ "$OPER" == *"read"* ]]; then
+                RDWR_STR="100"
+              else
+                RDWR_STR="0"
+              fi
+            else
+              if [[ "$OPER" == *"read"* ]]; then
+                RDWR_STR="read"
+              else
+                RDWR_STR="write"
+              fi
+            fi
+            SZ=$BLK_SZ
+            RS=sequential
+            if [[ "${OPER}" == *"ran"* ]]; then
+              RS=random
+            fi
+            if [ "$RAW" == "1" ]; then
+              FL_SZ_STR=
+            else
+              FL_SZ_STR="file_sz=$FILE_SZ"
+            fi
+            echo sz= ${SZ} rs= ${RS}
+            
+            SFX="_${SZ}_${OPER}${SFX_IN}"
+            ODIR=$SCR_DIR/vdb_data/vdb_out${SFX}
+            if [ "$DRY" == "0" ]; then
+              mkdir -p $ODIR
+            fi
+            done
+            OPT_JOBS=
+            if [ "$JVMS_IN_CFG" == "0" ]; then
+              if [ "$JOBS" != "" ]; then
+                OPT_JOBS="-m $JOBS"
+              fi
+            fi
+            if [ "$VDB_JVMS" != "" ]; then
+                OPT_JOBS="-m $VDB_JVMS"
+            fi
+          fi
+          #echo "$0.$LINENO bye"
+          #exit 1
+
           RUNS_IN_LOOP=$((RUNS_IN_LOOP+1))
           echo "$0.$LINENO ofl= $OFL"
           if [ "$GOT_PRECOND" == "0" ]; then
@@ -668,54 +902,83 @@ for MAX_DRIVES in $DRVS_LST; do
             kk=-1
             OFL_ARR=()
             for drv in $DLST; do
-            kk=$((kk+1))
-            V=
-            if [ "$PER_DRV" == "1" ]; then
-              V="$(echo $drv |sed 's!/dev/!!;s/n1$//')"
-              #if [[ "$PD_MAX" -gt "0" ]]; then
-                OFL="$(echo "$FIO_FL" | sed "s/.txt$/.$kk.txt/")"
-              #fi
-            fi
-            OFL_ARR[$kk]="$OFL"
-            OFL_LST="$OFL_LST $OFL"
-            echo __cmd $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS$OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA
-            echo __cmd $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS$OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA >> $OFL
-            echo "__threads $THREADS" >> $OFL
-            echo "__jobs $JOBS" >> $OFL
-            echo "__raw $RAW" >> $OFL
-            echo "__drives $DRVS" >> $OFL
-            echo "__drv $drv" >> $OFL
-            echo "__blk_sz $BLK_SZ" >> $OFL
-            echo "__seq_rnd $OPER" >> $OFL
-            echo "__elap_secs $TM_RUN" >> $OFL
-            echo "__per_drv $PER_DRV" >> $OFL
-            echo "__size $COUNT_BLKS_IN" >> $OFL
-            OPT_PERF=
-          if [[ "$kk" == "0" ]] && [[ "$PERF_IN" == "1" ]]; then
-            PRF_FL="$(echo "$FIO_FL" | sed 's/.txt$/_perf.txt/')"
-            OPT_PERF="$PERF_BIN stat -o $PRF_FL -a -e msr/tsc/,msr/mperf/,msr/aperf/ -- "
-            echo "__opt_perf= $OPT_PERF fio_cmd... >> $OFL" >> $OFL
-          fi
-            OPT_NUMA=
-            if [[ "$USE_NUMA" == "1" ]] && [[ "$V" != "" ]]; then
-              if [ -e /sys/class/nvme/$V/numa_node ]; then
-                NUMA_NODE="$(cat /sys/class/nvme/$V/numa_node 2> /dev/null)"
-                if [ "$NUMA_NODE" != "" ]; then
-                  OPT_NUMA="numactl -m $NUMA_NODE -N $NUMA_NODE"
+              kk=$((kk+1))
+              V=
+              if [ "$PER_DRV" == "1" ]; then
+                V="$(echo $drv |sed 's!/dev/!!;s/n1$//')"
+                #if [[ "$PD_MAX" -gt "0" ]]; then
+                  OFL="$(echo "$OUT_FL" | sed "s/.txt$/.$kk.txt/")"
+                #fi
+              fi
+              OFL_ARR[$kk]="$OFL"
+              OFL_LST="$OFL_LST $OFL"
+              if [ "$WORK_TYP" == "vdb" ]; then
+                echo "$VDB_CMD $OPT_JOBS -f $SCR_DIR/$RT_FL_CFG.$kk -o $ODIR $FL_SZ_STR $OPT_MNT files_threads=$THREADS seq_rnd=$RS xfer_sz=$SZ elap_secs=$TM_RUN rdwr=$RDWR_STR > $OFL"
+                echo  __cmd $VDB_CMD $OPT_JOBS -f $SCR_DIR/$RT_FL_CFG.$kk -o $ODIR $FL_SZ_STR $OPT_MNT files_threads=$THREADS seq_rnd=$RS xfer_sz=$SZ elap_secs=$TM_RUN rdwr=$RDWR_STR > $OFL
+                echo "__beg_cfg $SCR_DIR/$RT_FL_CFG.$kk" >> $OFL
+                cat  $SCR_DIR/$RT_FL_CFG.$kk | awk '{printf("__cfg %s\n", $0);}' >> $OFL
+                echo "__end_cfg $SCR_DIR/$RT_FL_CFG.$kk" >> $OFL
+              else
+                echo __cmd $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS $OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA
+                echo __cmd $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS $OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA >> $OFL
+              fi
+              echo "__threads $THREADS" >> $OFL
+              echo "__jobs $JOBS" >> $OFL
+              echo "__raw $RAW" >> $OFL
+              echo "__drives $DRVS" >> $OFL
+              echo "__drv $drv" >> $OFL
+              echo "__blk_sz $BLK_SZ" >> $OFL
+              echo "__oper $OPER" >> $OFL
+              if [ "$WORK_TYP" == "vdb" ]; then
+                echo "__seq_rnd $RS" >> $OFL
+              fi
+              echo "__elap_secs $TM_RUN" >> $OFL
+              echo "__per_drv $PER_DRV" >> $OFL
+              echo "__size $COUNT_BLKS_IN" >> $OFL
+              OPT_PERF=
+              if [[ "$kk" == "0" ]] && [[ "$PERF_IN" == "1" ]]; then
+                PRF_FL="$(echo "$OUT_FL" | sed 's/.txt$/_perf.txt/')"
+                if [ "$WORK_TYP" == "vdb" ]; then
+                  PRF_FL="$SCR_DIR/$PRF_FL"
+                fi
+                OPT_PERF="$PERF_BIN stat -o $PRF_FL -a -e msr/tsc/,msr/mperf/,msr/aperf/ -- "
+                echo "__opt_perf= $OPT_PERF ${WORK_TYP}_cmd... >> $OFL" >> $OFL
+              fi
+              OPT_NUMA=
+              if [[ "$USE_NUMA" == "1" ]] && [[ "$V" != "" ]]; then
+                if [ -e /sys/class/nvme/$V/numa_node ]; then
+                  NUMA_NODE="$(cat /sys/class/nvme/$V/numa_node 2> /dev/null)"
+                  if [ "$NUMA_NODE" != "" ]; then
+                    OPT_NUMA="numactl -m $NUMA_NODE -N $NUMA_NODE"
+                  fi
                 fi
               fi
-            fi
-            #echo "$0.$LINENO drv $drv"
-            #exit 1
-            if [ "$DRY" == "0" ]; then
-               echo "$0.$LINENO nohup $OPT_PERF $OPT_NUMA $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS$OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA >> $OFL 2> $OFL.stderr.txt &" >> $OFL
-                                nohup $OPT_PERF $OPT_NUMA $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS$OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA >> $OFL 2> $OFL.stderr.txt &
-               PD_PIDS="$! $PD_PIDS"
-            fi
+              if [ "$DRY" == "0" ]; then
+                if [ "$WORK_TYP" == "vdb" ]; then
+                  UDO_SUDO=
+                  if [ "$DO_SUDO" != "" ]; then
+                    UDO_SUDO="sudo -u root -i "
+                  fi
+                  echo "$0.$LINENO vdb cmdline= $UDO_SUDO nohup $OPT_PERF $OPT_NUMA $VDB_CMD $OPT_JOBS -f $SCR_DIR/$RT_FL_CFG.$kk -o $ODIR $FL_SZ_STR $OPT_MNT files_threads=$THREADS seq_rnd=$RS xfer_sz=$SZ elap_secs=$TM_RUN rdwr=$RDWR_STR >> $OFL 2> $OFL.stderr.txt &" > $OFL.cmdline.txt
+                  $UDO_SUDO nohup $OPT_PERF $OPT_NUMA $VDB_CMD $OPT_JOBS -f $SCR_DIR/$RT_FL_CFG.$kk -o $ODIR $FL_SZ_STR $OPT_MNT files_threads=$THREADS seq_rnd=$RS xfer_sz=$SZ elap_secs=$TM_RUN rdwr=$RDWR_STR >> $OFL 2> $OFL.stderr.txt &
+                else
+                  echo "$0.$LINENO $DO_SUDO nohup $OPT_PERF $OPT_NUMA $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS $OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA >> $OFL 2> $OFL.stderr.txt &" >> $OFL
+                                   $DO_SUDO nohup $OPT_PERF $OPT_NUMA $FIO_BIN --filename=$drv $OPT_THR $OPT_GEN --direct=1 $OPT_REP --rw=$OPER --bs=$BLK_SZ --ioengine=libaio --iodepth=$THREADS $OPT_FSZ --runtime=$TM_RUN --numjobs=$JOBS --time_based --group_reporting --name=iops-test-job --eta-newline=1 $OPT_XTRA >> $OFL 2> $OFL.stderr.txt &
+                fi
+                PD_PIDS="$! $PD_PIDS"
+              fi
             done
           fi
+          #echo "$0.$LINENO pd_pics= $PD_PIDS"
           if [ "$PD_PIDS" != "" ]; then
-            wait $PD_PIDS
+            #wait $PD_PIDS
+            for ck_pid in $PD_PIDS; do
+              wait $ck_pid
+              RC=$?
+              if [ "$RC" != "0" ]; then
+                echo "$0.$LINENO $WORK_TYP rc= $RC for pid= $ck_pid ======================"
+              fi
+            done
           fi
           if [ "$IOS_PID" != "" ]; then
             kill -SIGTERM $IOS_PID
@@ -724,128 +987,62 @@ for MAX_DRIVES in $DRVS_LST; do
           TM_CUR=$(date +"%s")
           TM_DFF=$((TM_CUR-TM_BEG))
           echo "$0.$LINENO secs_elapsed= $TM_DFF ofl= $OFL_LST"
+          if [[ "$DO_SUDO" != "" ]]; then
+              if [[ "$PRF_FL" != "" ]]; then
+                echo "$0.$LINENO fix permission on perf output file: chmod og+w $PRF_FL"
+                sudo chmod og+rw $PRF_FL
+              fi
+              if [[ "$WORK_TYP" == "vdb" ]]; then
+                echo "$0.$LINENO fix permission on vdb output dir files: chmod og+w $ODIR"
+                sudo chmod og+rw $ODIR/*
+              fi
+          fi
           if [ "$PRECOND_OFILES" != "" ]; then
             OFL="$PRECOND_OFILES"
           else
             OFL="$OFL_LST"
           fi
           RES_FL="f_res${SFX_IN}.txt"
-            echo "$0.$LINENO OFL list= $OFL"
-            cat $OFL | grep "^__" > $RES_FL
-            awk -v per_drv="$PER_DRV" -v num_cpus="$NUM_CPUS" -v sfx_in="$SFX" -v tm_dff="$TM_DFF" -v drvs="$DRVS" -v sz="$BLK_SZ" -v threads="$THREADS" -v procs="$JOBS" -v rdwr="$OPER" -v fio_fl="$FIO_FL" -v tm="$TM_RUN" -v iost_fl="$IO_FL" '
-              BEGIN{
-                szb = sz+0;
-                tm += 0;
-                #got_lat = 0;
-                if (sfx_in == "") { sfx_in = "null";}
-              }
-              /^__cmd / {
-                ++rn;
-                fl[rn] = FILENAME;
-                printf("fl[%d]= %s\n", rn, fl[rn]);
-              }
-              /^__threads / { sv[rn, "threads"] = $2; }
-              /^__jobs / { sv[rn, "procs"] = $2; }
-              /^__drives / { sv[rn, "drvs"] = $2; }
-              /^__blk_sz / { sv[rn, "sz"] = $2; }
-              /^__drv / { sv[rn, "drv"] = $2; }
-              /^__elap_secs / { sv[rn, "tm"] = $2; }
-              /issued rwt: total=|issued rwts: total=/ {
-                #issued rwt: total=0,571176,0, short=0,0,0, dropped=0,0,0
-                n = split(substr($3, index($3,"=")+1), arr, ",");
-                v = (arr[1] == "0" ? arr[2] : arr[1])+0;
-                sv[rn, "ios"] = v;
-                busy_str = "unk";
-                if (idle > 0 && idle_n > 0) {
-                  sv[rn, "busy"] = 100 - (idle/idle_n);
-                  sv[rn, "busy_str"] = sprintf("%.3f", sv[rn, "busy"]);
-                }
-              }
-              /msr\/tsc\// {
-                if ($2 == "msr/tsc/") { v=$1; gsub(/,/, "", v); tsc = v+0;}
-              }
-              /msr\/mperf\// {
-                if ($2 == "msr/mperf/") { v=$1; gsub(/,/, "", v); mperf = v+0;}
-              }
-              /msr\/aperf\// {
-                if ($2 == "msr/aperf/") { v=$1; gsub(/,/, "", v); aperf = v+0;}
-              }
-              / seconds time elapsed/ {
-                gsub(/,/, "", $1);
-                perf_elapsed_secs = $1+0;
-                if (tsc > 0 && mperf > 0 && num_cpus > 0) {
-                  tsc_freq_ghz = 1e-9 * tsc/perf_elapsed_secs/num_cpus;
-                  cpu_freq_ghz = tsc_freq_ghz * aperf / mperf;
-                  unhalted_ratio = mperf / tsc;
-                  unhaltedTL = unhalted_ratio * 100 * num_cpus;
-                  printf("tsc= %.0f mperf= %.0f  aperf= %.0f tsc_frq= %f cpu_frq= %f unhalted_rate= %f unhTL= %f\n", tsc, mperf, aperf, tsc_freq_ghz, cpu_freq_ghz, unhalted_ratio, unhaltedTL) > "/dev/stderr";
-                  # str below needs to start and end with space
-                  unhalted_str = sprintf(" %%unhalted= %.3f unhaltedTL= %.3f cpu_freqGHz= %.3f ", 100 * unhalted_ratio, unhaltedTL, cpu_freq_ghz);
-                }
-              }
-              $1 == "lat" && got_lat[rn] == "" {
-                 #      lat (usec): min=24, max=22870, avg=782.89, stdev=1886.33
-                 got_lat[rn] = 1;
-                 lat_unit = $2;
-                 n = split($5, arr, "=");
-                 lat = arr[2];
-                 fctr = 0;
-                 if (index(lat_unit, "msec") > 0) { fctr= 0.001;}
-                 else if (index(lat_unit, "usec") > 0) { fctr= 1e-6;}
-                 else if (index(lat_unit, "nsec") > 0) { fctr= 1e-9;}
-                 sv[rn,"lat_ms"] = 1000 * fctr * lat;
-              }
-              /Run status group/ {
-#  WRITE: bw=3532MiB/s (3703MB/s), 3532MiB/s-3532MiB/s (3703MB/s-3703MB/s), io=60.0GiB (64.4GB), run=17397-17397msec
-                #printf("got Run status group= %s\n", $0) > "/dev/stderr";
-                getline;
-                sv_run_ln= $0;
-                #printf("line after Run status group= %s\n", $0) > "/dev/stderr";
-                for (i=1; i <= NF; i++) {
-                  if (index($i, "run=") == 1) {
-                    n = split($i, arr, "=");
-                    fctr = 1;
-                    if (index(arr[2], "msec") > 0) { fctr = 0.001;}
-                    n = split(arr[2], brr, "-");
-                    sv[rn,"tm_act"] = brr[1] * fctr;
-                  }
-                }
-              }
-              /avg-cpu:.* %user.* %nice.* %system.* %iowait.* %steal.*%idle/ {
-                getline;
-                idle += $NF;
-                idle_n++;
-              }
-              END{
-                for (i=1; i <= rn; i++) {
-                sz = sv[i,"sz"];
-                szb = sz+0;
-                if (index(sz, "k") > 0) { szb *= 1024;}
-                if (index(sz, "m") > 0) { szb *= 1024*1024;}
-                tm = sv[i,"tm"];
-                tm_act = sv[i,"tm_act"];
-                if (tm == -1 && tm_act > 0) { tm = tm_act; }
-                if (unhalted_str == "") { my_unhalted_str = " ";} else { my_unhalted_str = unhalted_str;}
-                #printf("v= %s tm= %s szb= %s tm_act= %s sv_ln= %s\n", v, tm, szb, tm_act, sv_run_ln) > "/dev/stderr";
-                drvs = sv[i,"drvs"];
-                threads = sv[i,"threads"];
-                procs = sv[i,"procs"];
-                busy_str = sv[i,"busy_str"];
-                lat_ms = sv[i,"lat_ms"];
-                drv = sv[i,"drv"];
-                v = sv[i,"ios"];
-                printf("qq drives= %d oper= %s sz= %s IOPS(k)= %.3f bw(MB/s)= %.3f szKiB= %d iodepth= %d procs= %d tm_act_secs= %.4f %%busy= %s lat_ms= %f sfx= %s%sdrv= %s iostat= %s fio_fl= %s\n",
-                 drvs, rdwr, sz, 0.001 * v/tm, 1e-6 * v * szb / tm, szb/1024, threads, procs, tm_act, busy_str, lat_ms, sfx_in, my_unhalted_str, drv, iost_fl, fl[i]);
-                printf("\n");
-                }
-              }
-              ' $PRF_FL $IO_FL $OFL >> $RES_FL
-              ck_last_rc $? $LINENO
-              cat $RES_FL
-          if [ "$DRY" == "0" ]; then
+          echo "$0.$LINENO OFL list= $OFL"
+          cat $OFL | grep "^__" > $RES_FL
+          if [ "$WORK_TYP" == "fio" ]; then
+            awk -v per_drv="$PER_DRV" -v num_cpus="$NUM_CPUS" -v sfx_in="$SFX" -v tm_dff="$TM_DFF" -v drvs="$DRVS" -v sz="$BLK_SZ" -v threads="$THREADS" -v procs="$JOBS" -v rdwr="$OPER" -v fio_fl="$OFL" -v tm="$TM_RUN" -v iost_fl="$IO_FL" -f $SCR_DIR/do_${WORK_TYP}_rd_output.awk $PRF_FL $IO_FL $OFL >> $RES_FL
+            ck_last_rc $? $LINENO
+            cat $RES_FL
+            if [ "$DRY" == "0" ]; then
               cat $RES_FL >> f_all.txt
               cat $RES_FL >> f_all${SFX}.txt
-              cp  $RES_FL $FIO_FL
+              cp  $RES_FL $OUT_FL
+            fi
+          else
+            grep "^__" $OFL > v_res.txt
+            awk '/Starting RD/ {
+                printf("%s\n", $0);
+                getline;
+                getline;
+                printf("%s\n", $0);
+                getline;
+                printf("%s\n", $0);
+              }
+              / avg_/ {
+                printf("%s\n", $0);
+              }
+              END{ printf("\n");}
+            ' $OFL >> v_res.txt
+            udrv="$DRV_STR"
+            if [ "$PER_DRV" == "1" ]; then
+              udrv="$DRVS"
+            fi
+            echo "$0.$LINENO ofl_lst= $OFL_LST"
+            USE_OFL=v_res.txt
+            USE_OFL="$OFL_LST"
+            echo vdb awk_cmd awk -v sfx="$SFX" -v num_cpus="$NUM_CPUS" -v perf_fl="$PRF_FL" -v tm_dff="$TM_RUN" -v drvs="$DRVS" -v sz="$SZ" -v threads="$THREADS" -v procs="$JOBS" -v rdwr="$OPER" -v fio_fl="$OFL" -v tm="$TM_RUN" -v iost_fl="$IO_FL" -v drv_str="$DRVS" -f $SCR_DIR/do_vdb_rd_output.awk $PRF_FL $IO_FL $USE_OFL _ v_res1.txt
+            awk -v sfx="$SFX" -v num_cpus="$NUM_CPUS" -v perf_fl="$PRF_FL" -v tm_dff="$TM_RUN" -v drvs="$DRVS" -v sz="$SZ" -v threads="$THREADS" -v procs="$JOBS" -v rdwr="$OPER" -v fio_fl="$OFL" -v tm="$TM_RUN" -v iost_fl="$IO_FL" -v drv_str="$DRVS" -f $SCR_DIR/do_vdb_rd_output.awk $PRF_FL $IO_FL $USE_OFL > v_res1.txt
+            ck_last_rc $? $LINENO
+            cat v_res1.txt >> v_res.txt
+            cat v_res.txt
+            cat v_res.txt >> v_all.txt
+            cat v_res.txt >> v_all_$i.txt
           fi
               if [ "$GOT_QUIT" != "0" ]; then
                 if [ "$IOS_PID" != "" ]; then
@@ -866,13 +1063,14 @@ for MAX_DRIVES in $DRVS_LST; do
               fi
               #echo "$0.$LINENO bye"
               #exit 1
-              echo "vim $FIO_FL"
+              echo "vim $OFL"
               echo "vim $IO_FL"
-        done # read write
+        done # OPER read write
       done # BLK_SZ
     done # THREADS
   done # JOBS 
-done # DRVS_LST
+ done # DRVS_LST
+done # WORK_TYP in $WORK_LST_IN
 echo "$0.$LINENO RUNS_IN_LOOP=$RUNS_IN_LOOP"
 echo "qq done"
 echo "qq done" >&2
