@@ -34,6 +34,12 @@ Features of the code:
 ```
 ./do_fio.sh -y --dry_run 0 --raw  -L nvme0n1,nvme1n1,nvme2n1,nvme3n1,nvme4n1,nvme5n1,nvme6n1,nvme7n1  -O randread -B 4k -t 20 -D 8 -J 32 -T 32 -p 1 -P 1 -x "--ioengine=posixaio"
 ```
+
+I've since changed do_fio.sh to do either fio or vdbench. Here is an example. Option -W fio,vdb does the cmd over both fio and vbdbench.
+See run_multi.sh for and example of doing over a list of disks, blocks, number of jobs, operators (read, randread, etc), and fio or vdbench.
+```
+./do_fio.sh -y  --dry_run 0 -D 1 -L nvme0n1,nvme1n1,nvme2n1,nvme3n1,nvme4n1,nvme5n1,nvme6n1,nvme7n1 -f 0  -n 1 -O randread -p 1 -P 1 -t 10 -J 4 -T 64 -r 1 -B 4k -W fio,vdb -D 1|grep qq
+```
    - sample output below... shows IOPS= ~900K per drive and %busy ~92% (from fio) and %unhalted= 97% (from perf). The raw fio, iostat and perf data are given.
 ```
 qq drives= 8 oper= randread sz= 4k IOPS(k)= 875.283 bw(MB/s)= 3585.159 szKiB= 4 iodepth= 32 procs= 32 tm_act_secs= 20.0020 %busy= 92.835 lat_ms= 1.168950 sfx= _4k_randread %unhalted= 97.368 unhaltedTL= 24926.140 cpu_freqGHz= 3.239 drv= /dev/nvme0n1 iostat= iostat_data/iostat_4k_randread_032jobs_032thrds_8drvs_1raid_0raw_0fs.txt fio_fl= fio_data/fio_4k_randread_032jobs_032thrds_8drvs_1raid_0raw_0fs.0.txt
